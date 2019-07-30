@@ -1,0 +1,197 @@
+---
+title: "Audio Filtering"
+author: "Jingjing Guo"
+date: "November 5, 2017"
+output: 
+  # pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+###*Load original audio files:
+```{r}
+library(audio)
+s1 <- load.wave("mike1.wav")
+s2 <- load.wave("mike2.wav")
+s3 <- load.wave("mike3.wav")
+
+x1 <- matrix(s1, nrow=1)
+x2 <- matrix(s2, nrow=1)
+x3 <- matrix(s3, nrow=1)
+
+X <- rbind(x1,x2,x3)
+COV <- diag(3)
+for(i in 1:3){
+  for(j in 1:3){
+    COV[i,j] <- cov(X[i,],X[j,])
+  }
+}
+print(COV)
+```
+```{r}
+#scatter plot
+# d12 <- data.frame(x1=head(t(x1)), x2=head(t(x2)))
+# d23 <- data.frame(x2=head(t(x2)), x3=head(t(x3)))
+# d31 <- data.frame(x3=head(t(x3)), x1=head(t(x1)))
+
+par(mfrow=c(1,3)) 
+# plot(x1[1:100],x2[1:100])
+# plot(x2[1:100],x3[1:100])
+# plot(x3[1:100],x1[1:100])
+plot(x1,x2)
+plot(x2,x3)
+plot(x3,x1)
+```
+### Calculate Square root of the covariance matrix, sqCov:
+```{r}
+library(expm)
+options( warn = -1 )
+sqCov <- sqrtm(COV)
+X_white <- solve(sqCov) %*% X
+#cov of X_white
+sCov <- diag(3)
+for(i in 1:3){
+  for(j in 1:3){
+    sCov[i,j] <- cov(X_white[i,],X_white[j,])
+  }
+}
+sCov <- round(sCov, digits = 6)
+print(sCov)
+```
+
+
+### Gradient Descend Algorithm:
+1) Intialization of W: with a uniform unit random variable
+2) Step size: Set $\eta$ to be 1
+3) Iterations needed: printed below
+4) Log-likelihood plot: see output of below code
+5) Estimate W: printed after code
+6) print $X_{White} = sqCov^{-1} \cdot X$: see printed output of below code
+7) Started with different initializations?
+
+```{r echo=TRUE}
+#use the function with new initialization
+#X1 = t(head(t(X)))
+
+gd <- function(X) {
+  T <- ncol(X)
+  print(T)
+  # initialization
+  eta <- 1
+  tol <- 1e-2 # stopping criterion
+  
+  n_iter <- 1 
+  
+  set.seed(2)
+  W_new <- matrix(runif(9), nrow=3)
+  # W_new[lower.tri(W_new)] = t(W_new)[lower.tri(W_new)]
+  # W_new <- matrix(c(1,6,3,7,2,1,9,8,2), nrow=3)
+  W_old <- matrix(0,nrow=3 , ncol=3)
+  
+  logP <- list()
+  while( norm(W_new - W_old, type="2") > tol ){
+    W_old <- W_new
+    W_new <- W_old + eta *( t(solve(W_old)) + 1/T * (-tanh(W_old %*% X) ) %*% t(X) )
+    #logP[n_iter] <- T * log( abs( det(W_new) ) ) + sum( log( y(W_new%*%X) ))
+    logP[n_iter] <- T*log(abs(det(W_new)))+sum( log( 1/(pi*cosh( W_new%*%X )) ) )
+    # logP[n_iter] <- sum( log( 1/(pi*cosh( W_new%*%X )) ) )
+    n_iter <- n_iter + 1
+  }
+  dM <-W_new %*% solve(sqCov)
+return(list(n=n_iter, W_h =W_new, l=logP, demixM=dM))
+}
+
+outs <- gd(X_white)
+print(outs[c(1,2,4)])
+
+```
+```{r}
+maxL <- length(outs$l)
+plot(x=1:maxL, y=outs$l, xlab="N", ylab="log Likelihood")
+```
+
+
+### histograms of raw, whitened, and recovered data
+```{r}
+rawX <- X
+whiteX <- X_white
+recoverX <- outs$demixM %*% X
+
+par(mfrow=c(3,3))
+#raw
+hist(rawX[1,])
+hist(rawX[2,])
+hist(rawX[3,])
+#whitened
+hist(whiteX[1,])
+hist(whiteX[2,])
+hist(whiteX[3,])
+#recovered
+hist(recoverX[1,])
+hist(recoverX[2,])
+hist(recoverX[3,])
+
+```
+
+
+
+### Recover Source:
+
+$\hat{Y} = \hat{W} \cdot sqCov^{-1} \cdot X$
+
+Covariance matrix of recovered sources:
+```{r}
+yhat <- recoverX
+COV <- diag(3)
+for(i in 1:3){
+  for(j in 1:3){
+    COV[i,j] <- cov(X[i,],X[j,])
+  }
+}
+```
+
+
+Scatter plots and hisograms of the marginals using ggExtra
+```{r echo=TRUE}
+library(ggplot2)
+library(ggExtra)
+options(warn= -1)
+# yhat <- recoverX[,1:1000]
+#yhat <- recoverX
+yhat <- outs$demixM %*% X
+df12 <- data.frame(x1 = yhat[1,], x2 = yhat[2,])
+p1 <- ggplot(df12, aes(x1, x2)) + geom_point() + theme_classic()
+ggExtra::ggMarginal(p1, type = "histogram")
+p1
+df23 <- data.frame(x2 = yhat[2,], x3 = yhat[3,])
+p2 <- ggplot(df23, aes(x2, x3)) +
+      geom_point() +
+      theme(legend.position="none")
+ggMarginal(p2, type="histogram")
+p2
+df31 <- data.frame(x3 = yhat[3,], x1 = yhat[1,])
+p3 <- ggplot(df31, aes(x3, x1)) +
+      geom_point() +
+      theme(legend.position="none")
+ggMarginal(p3, type="histogram")
+```
+```{r}
+row_max <- apply(recoverX,1,max)
+row_max <-1/(2*row_max)
+recoverX<-recoverX*row_max
+save.wave(recoverX[1,],"1.wav")
+save.wave(recoverX[2,],"2.wav")
+save.wave(recoverX[3,],"3.wav")
+```
+
+
+### Discussion
+
+Likelihood estimate of W is not unique. 
+
+1) Initialization can cause the optimum to be different. The Gradient Ascent Method can only guarantee local optimum, not the global optimum.
+2) Tolerance set for stopping criterion will also change W, although the effect is not as significant as intialization.
